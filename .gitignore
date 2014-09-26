@@ -52,3 +52,12 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Rope
+.ropeproject
+
+# Vim
+*.swp
+
+# Blender backups
+*.blend1
