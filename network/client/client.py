@@ -1,8 +1,11 @@
+#!/usr/bin/env python2
+
 import logging
+import sys
+import argparse
 
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import KeyboardButton
-from direct.task import Task
+from panda3d.core import KeyboardButton, QueuedConnectionManager, QueuedConnectionReader
 
 
 class Player(object):
@@ -82,36 +85,22 @@ class Player(object):
         self.node.setHpr(h, p, r)
 
     def check_movement(self, task):
-        if self.is_down(self.forward):
-            logging.debug('moving forward')
+        if self.is_down(self.forward) or self.is_down(self.backward):
             current_y = self.get_y()
             logging.debug('current y: %s', current_y)
-            y_delta = self.speed * self.get_dt() + current_y
-            logging.debug('new y: %s', y_delta)
-            self.set_y(y_delta)
-        if self.is_down(self.backward):
-            logging.debug('moving backward')
-            current_y = self.get_y()
-            logging.debug('current y: %s', current_y)
-            y_delta = (self.speed * -1) * self.get_dt() + current_y
-            logging.debug('new y: %s', y_delta)
-            self.set_y(y_delta)
-        if self.is_down(self.left):
-            logging.debug('moving left')
+            mod = 1 if self.is_down(self.forward) else -1
+            new_y = self.speed * mod * self.get_dt() + current_y
+            logging.debug('new y: %s', new_y)
+            self.set_y(new_y)
+        if self.is_down(self.left) or self.is_down(self.right):
             current_x = self.get_x()
             logging.debug('current x: %s', current_x)
-            x_delta = (self.speed * -1) * self.get_dt() + current_x
-            logging.debug('new x: %s', x_delta)
-            self.set_x(x_delta)
-        if self.is_down(self.right):
-            logging.debug('moving right')
-            current_x = self.get_x()
-            logging.debug('current x: %s', current_x)
-            x_delta = self.speed * self.get_dt() + current_x
-            logging.debug('new x: %s', x_delta)
-            self.set_x(x_delta)
+            mod = 1 if self.is_down(self.right) else -1
+            new_x = self.speed * mod * self.get_dt() + current_x
+            logging.debug('new x: %s', new_x)
+            self.set_x(new_x)
 
-        return Task.cont
+        return task.cont
 
     @property
     def is_down(self):
@@ -120,23 +109,47 @@ class Player(object):
 
 class Client(ShowBase):
 
-    def __init__(self):
+    def __init__(self, server_host, server_port):
         ShowBase.__init__(self)
+        self.server_host = server_host
+        self.server_port = server_port
 
-        # add the player to the scene
-        self.player = Player(self)
+        # bind the escape key to close the client
+        self.accept('escape', self.close)
 
-        # self.accept('w', self.move_forward)
+        self.conn_manager = QueuedConnectionManager()
+        self.conn_reader = QueuedConnectionReader(self.conn_manager, 0)
+        logging.debug(
+            'attempting to connect to server at %s:%d',
+            self.server_host,
+            self.server_port
+        )
+        self.conn = self.conn_manager.openTCPClientConnection(
+            self.server_host,
+            self.server_port,
+            10000,
+        )
+        if self.conn:
+            logging.debug('connection established')
+            self.conn_reader.addConnection(self.conn)
+            # add the player to the scene
+            self.player = Player(self)
 
-    def move_forward(self):
-        logging.debug('moving forward')
-        current_y = self.cube.getY()
-        y_delta = self.speed * self.taskMgr.globalClock.get_dt() + current_y
-        logging.debug('y: %s', y_delta)
-        self.cube.setY(y_delta)
+    def close(self):
+        logging.info('shutting down...')
+        sys.exit(0)
 
 
-client = Client()
-logging.basicConfig(level=logging.DEBUG)
-logging.debug('starting...')
-client.run()
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+
+    parser = argparse.ArgumentParser(description='client options')
+    parser.add_argument('--host', dest='host', default='localhost',
+                        help='server hostname/ip address (default: localhost)')
+    parser.add_argument('--port', dest='port', type=int, default=10000,
+                        help='server port (default: 10000)')
+    args = parser.parse_args()
+
+    logging.info('starting...')
+    client = Client(args.host, args.port)
+    client.run()
