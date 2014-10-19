@@ -8,7 +8,16 @@ from direct.showbase.ShowBase import ShowBase
 from panda3d.core import KeyboardButton, QueuedConnectionManager, QueuedConnectionReader
 
 
-class Player(object):
+class GlobalClockMixin(object):
+
+    def get_dt(self):
+        """
+        :returns int: elapsed time for the previous frame
+        """
+        return self.base.taskMgr.globalClock.get_dt()
+
+
+class Player(GlobalClockMixin):
 
     model_path = 'models/cube01'
     speed = 10
@@ -49,12 +58,6 @@ class Player(object):
         :returns float: y coordinate for node
         """
         return self.node.getY()
-
-    def get_dt(self):
-        """
-        :returns int: elapsed time for the previous frame
-        """
-        return self.base.taskMgr.globalClock.get_dt()
 
     def set_pos(self, x, y, z):
         """
@@ -107,33 +110,80 @@ class Player(object):
         return self.base.mouseWatcherNode.is_button_down
 
 
+class Connection(GlobalClockMixin):
+
+    def __init__(self, base, host, port):
+        self.base = base
+        self.host = host
+        self.port = port
+
+        self._retry_elapsed = 0
+        self._retry_next = 0
+
+        self.manager = QueuedConnectionManager()
+        self.reader = QueuedConnectionReader(
+            self.manager,
+            0,  # number of threads
+        )
+
+    def connect(self, connected_callback, task):
+        self._retry_elapsed += self.get_dt()
+        if self._retry_elapsed < self._retry_next:
+            return task.cont
+
+        logging.debug(
+            'attempting to connect to server at %s:%d',
+            self.host,
+            self.port
+        )
+        self._conn = self.manager.openTCPClientConnection(
+            self.host,
+            self.port,
+            10000,  # timeout ms
+        )
+
+        if self._conn:
+            logging.debug('connection established')
+            self.reader.addConnection(self._conn)
+            connected_callback()
+            return
+        else:
+            self._retry_elapsed = 0
+            if self._retry_next == 0:
+                self._retry_next = 1
+            elif self._retry_next > 9:
+                self._retry_next = 10
+            else:
+                self._retry_next += 1
+
+            logging.error(
+                'Unable to connect to server %s:%s, will retry in %d seconds',
+                self.host,
+                self.port,
+                self._retry_next,
+            )
+            return task.cont
+
+
 class Client(ShowBase):
 
-    def __init__(self, server_host, server_port):
+    def __init__(self, host, port):
         ShowBase.__init__(self)
-        self.server_host = server_host
-        self.server_port = server_port
 
         # bind the escape key to close the client
         self.accept('escape', self.close)
 
-        self.conn_manager = QueuedConnectionManager()
-        self.conn_reader = QueuedConnectionReader(self.conn_manager, 0)
-        logging.debug(
-            'attempting to connect to server at %s:%d',
-            self.server_host,
-            self.server_port
+        self.conn = Connection(self, host, port)
+        self.taskMgr.add(
+            self.conn.connect,
+            name='connect_to_server',
+            extraArgs=[self.connected],
+            appendTask=True,  # appends task object to args list
         )
-        self.conn = self.conn_manager.openTCPClientConnection(
-            self.server_host,
-            self.server_port,
-            10000,
-        )
-        if self.conn:
-            logging.debug('connection established')
-            self.conn_reader.addConnection(self.conn)
-            # add the player to the scene
-            self.player = Player(self)
+
+    def connected(self):
+        logging.debug('creating player')
+        self.player = Player(self)
 
     def close(self):
         logging.info('shutting down...')

@@ -10,7 +10,7 @@ from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 
 
-connections = []
+connections = dict()
 
 
 def connection_ready(sock, fd, events):
@@ -24,8 +24,8 @@ def connection_ready(sock, fd, events):
 
         connection.setblocking(0)
         stream = IOStream(connection)
-        connections.append(stream)
-        logging.debug('accepted connection from %s (%d)', address, len(connections))
+        connections[address] = stream
+        logging.info('accepted connection from %s (%d)', address, len(connections))
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
