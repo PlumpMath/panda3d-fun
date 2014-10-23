@@ -5,7 +5,11 @@ import sys
 import argparse
 
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import KeyboardButton, QueuedConnectionManager, QueuedConnectionReader
+from panda3d.core import (KeyboardButton,
+                          QueuedConnectionManager,
+                          QueuedConnectionReader,
+                          ConnectionWriter
+                          )
 
 
 class GlobalClockMixin(object):
@@ -16,8 +20,17 @@ class GlobalClockMixin(object):
         """
         return self.base.taskMgr.globalClock.get_dt()
 
+class TaskMixin(object):
 
-class Player(GlobalClockMixin):
+    def add_task(self, callback, name):
+        """
+        :param func callback: callback the task manager should execute
+        :param str name: name to assign the task
+        """
+        self.base.taskMgr.add(callback, name)
+
+
+class Player(GlobalClockMixin, TaskMixin):
 
     model_path = 'models/cube01'
     speed = 10
@@ -39,13 +52,6 @@ class Player(GlobalClockMixin):
 
         # create a task to check for movement
         self.add_task(self.check_movement, 'detect_player_movement')
-
-    def add_task(self, callback, name):
-        """
-        :param func callback: callback the task manager should execute
-        :param str name: name to assign the task
-        """
-        self.base.taskMgr.add(callback, name)
 
     def get_x(self):
         """
@@ -110,23 +116,34 @@ class Player(GlobalClockMixin):
         return self.base.mouseWatcherNode.is_button_down
 
 
-class Connection(GlobalClockMixin):
+class Connection(GlobalClockMixin, TaskMixin):
 
     def __init__(self, base, host, port):
         self.base = base
         self.host = host
         self.port = port
 
+        self._conn = None
+
         self._retry_elapsed = 0
         self._retry_next = 0
+        self._data_last_received = 0
 
         self.manager = QueuedConnectionManager()
         self.reader = QueuedConnectionReader(
             self.manager,
             0,  # number of threads
         )
+        self.writer = ConnectionWriter(
+            self.manager,
+            0,  # number of threads
+        )
 
     def connect(self, connected_callback, task):
+        """
+        Attempts to connect to the server and if unable to will retry adding
+        a second to the wait time to each consecutive failure.
+        """
         self._retry_elapsed += self.get_dt()
         if self._retry_elapsed < self._retry_next:
             return task.cont
@@ -145,24 +162,48 @@ class Connection(GlobalClockMixin):
         if self._conn:
             logging.debug('connection established')
             self.reader.addConnection(self._conn)
+
+            # reset the counters in case the connection drops and we have to restart the
+            # connection process
+            self._retry_elapsed = 0
+            self._retry_next = 0
+
+            # add a task to poll the connection for data
+            self.add_task(self.task_read_polling, 'connection_reader_poll')
+
             connected_callback()
             return
-        else:
-            self._retry_elapsed = 0
-            if self._retry_next == 0:
-                self._retry_next = 1
-            elif self._retry_next > 9:
-                self._retry_next = 10
-            else:
-                self._retry_next += 1
 
-            logging.error(
-                'Unable to connect to server %s:%s, will retry in %d seconds',
-                self.host,
-                self.port,
-                self._retry_next,
-            )
-            return task.cont
+        # no connection so retry in a bit
+        self._retry_elapsed = 0
+        if self._retry_next == 0:
+            self._retry_next = 1
+        elif self._retry_next > 9:
+            self._retry_next = 10
+        else:
+            self._retry_next += 1
+
+        logging.error(
+            'Unable to connect to server %s:%s, will retry in %d seconds',
+            self.host,
+            self.port,
+            self._retry_next,
+        )
+        return task.cont
+
+    def task_read_polling(self, task):
+        if self.reader.dataAvailable():
+            logging.debug('incoming data')
+            self._data_last_received = 0
+        else:
+            # no data received
+            self._data_last_received += self.get_dt()
+
+        if self._data_last_received >= 10:
+            logging.error('connection to server lost')
+            return
+
+        return task.cont
 
 
 class Client(ShowBase):
@@ -187,6 +228,7 @@ class Client(ShowBase):
 
     def close(self):
         logging.info('shutting down...')
+        # TODO: close connection gracefully
         sys.exit(0)
 
 
