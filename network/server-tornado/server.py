@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 import logging
 import argparse
@@ -6,11 +6,17 @@ import socket
 import functools
 import errno
 
-from tornado.ioloop import IOLoop
+import packets
+
+from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import IOStream
 
 
 connections = dict()
+
+
+def send_heartbeat():
+    logging.debug('sending heartbeat to %d connection(s)', len(connections))
 
 
 def connection_ready(sock, fd, events):
@@ -46,6 +52,8 @@ if __name__ == '__main__':
     io_loop = IOLoop.current()
     callback = functools.partial(connection_ready, sock)
     io_loop.add_handler(sock.fileno(), callback, io_loop.READ)
+    heartbeat = PeriodicCallback(send_heartbeat, 1000, io_loop)
+    heartbeat.start()
 
     try:
         io_loop.start()
