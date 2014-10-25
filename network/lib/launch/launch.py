@@ -21,20 +21,30 @@ class formats(object):
 
 class Field(object):
 
-    format = None
-
     def __init__(self, format=None):
         self.format = format
 
+    def __get__(self, obj, type):
+        raise NotImplementedError
+
+    def __set__(self, obj, value):
+        raise NotImplementedError
+
 
 class Packet(object):
-
-    #:
+    """
+    :attr:`protocol`, :attr:`type`, and :attr:`length` are all part of the header
+    data. They are packed in the order just listed. Immediately following them
+    is the payload, if any.
+    """
+    #: The :attr:`protocol` needs to be set by the user. All packets need to
+    #: share the same protocol version. The :attr:`protocol` is assumed to be
+    #: an :class:`int`.
     protocol = None
-    #:
+    #: The :attr:`type` needs to be set by the user. This identifies what type
+    #: of packet the data belongs to. The :attr:`type` is assumed to be an
+    #: :class:`int`.
     type = None
-    #:
-    length = None
 
     def __new__(cls, data=None):
         for attr_name, attr_value in cls.__dict__.items():
@@ -52,15 +62,28 @@ class Packet(object):
                     )
                 )
 
-        return super(Packet, cls).__new__(cls)
+        inst = super(Packet, cls).__new__(cls)
+        inst._length = None
+        inst._format = ''
+        return inst
 
     def __init__(self, data=None):
         pass
 
-    def __str__(self):
+    @property
+    def length(self):
+        """
+        The :attr:`length` will be set automatically and simply identifies how large
+        the payload is.
+        """
+        return self._length
+
+    def __bytes__(self):
         if self.type is None:
             raise AttributeError('{}.type not defined'.format(self.__class__.__name__))
         elif self.protocol is None:
             raise AttributeError('{}.protocol not defined'.format(self.__class__.__name__))
 
-        raise NotImplementedError
+        self._length = struct.calcsize(self._format)
+        header = struct.pack('iii', self.protocol, self.type, self.length)
+        return header
