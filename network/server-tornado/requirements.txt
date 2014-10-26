@@ -1,3 +1,4 @@
 tornado
 
 -e ../lib/launch
+-e ../common/protocol

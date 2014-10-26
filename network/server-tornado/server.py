@@ -6,7 +6,7 @@ import socket
 import functools
 import errno
 
-import packets
+import protocol
 
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import IOStream
@@ -16,7 +16,21 @@ connections = dict()
 
 
 def send_heartbeat():
+    if len(connections) < 1:
+        # skip heartbeat if no connections
+        return
+
     logging.debug('sending heartbeat to %d connection(s)', len(connections))
+    for conn_addr in connections:
+        stream = connections[conn_addr]
+        p = protocol.HeartBeat()
+        stream.write(bytes(p))
+
+
+def clear_connection(conn_addr):
+    if conn_addr in connections:
+        del connections[conn_addr]
+        logging.info('removed closed connection %s (%d)', conn_addr, len(connections))
 
 
 def connection_ready(sock, fd, events):
@@ -30,6 +44,9 @@ def connection_ready(sock, fd, events):
 
         connection.setblocking(0)
         stream = IOStream(connection)
+        # add callback to handle stream close
+        stream.set_close_callback(functools.partial(clear_connection, address))
+
         connections[address] = stream
         logging.info('accepted connection from %s (%d)', address, len(connections))
 
@@ -52,7 +69,7 @@ if __name__ == '__main__':
     io_loop = IOLoop.current()
     callback = functools.partial(connection_ready, sock)
     io_loop.add_handler(sock.fileno(), callback, io_loop.READ)
-    heartbeat = PeriodicCallback(send_heartbeat, 1000, io_loop)
+    heartbeat = PeriodicCallback(send_heartbeat, 2000, io_loop)
     heartbeat.start()
 
     try:
