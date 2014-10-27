@@ -1,14 +1,17 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 import logging
 import sys
 import argparse
 
+import protocol
+
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (KeyboardButton,
                           QueuedConnectionManager,
                           QueuedConnectionReader,
-                          ConnectionWriter
+                          ConnectionWriter,
+                          Datagram
                           )
 
 
@@ -20,14 +23,30 @@ class GlobalClockMixin(object):
         """
         return self.base.taskMgr.globalClock.get_dt()
 
+
 class TaskMixin(object):
 
-    def add_task(self, callback, name):
+    @property
+    def task_manager(self):
+        task_manager = self.taskMgr if hasattr(self, 'taskMgr') else self.base.taskMgr
+        return task_manager
+
+    def add_task(self, callback, name=None, sort=None, extra_args=None, append_task=None):
         """
         :param func callback: callback the task manager should execute
         :param str name: name to assign the task
+        :param int sort: sort value to assign task, lower sort values run before tasks with
+                         higher sort values
+        :param list extra_args: list of arguments to pass to the task callback
+        :param bool append_task: if `True` task object will be appended to :attr:`extra_args`
         """
-        self.base.taskMgr.add(callback, name)
+        self.task_manager.add(
+            callback,
+            name=name,
+            sort=sort,
+            extraArgs=extra_args,
+            appendTask=append_task,
+        )
 
 
 class Player(GlobalClockMixin, TaskMixin):
@@ -130,10 +149,17 @@ class Connection(GlobalClockMixin, TaskMixin):
         self._data_last_received = 0
 
         self.manager = QueuedConnectionManager()
+
         self.reader = QueuedConnectionReader(
             self.manager,
             0,  # number of threads
         )
+
+        # we're using our own protocol so we don't want panda reading our headers and getting
+        # all foobared by it (not setting (not setting raw mode causes `dataAvailable` to block
+        # once there is actually data to process)
+        self.reader.setRawMode(True)
+
         self.writer = ConnectionWriter(
             self.manager,
             0,  # number of threads
@@ -169,7 +195,11 @@ class Connection(GlobalClockMixin, TaskMixin):
             self._retry_next = 0
 
             # add a task to poll the connection for data
-            self.add_task(self.task_read_polling, 'connection_reader_poll')
+            self.add_task(
+                self.task_read_polling,
+                name='connection_reader_poll',
+                sort=-39,
+            )
 
             connected_callback()
             return
@@ -193,10 +223,15 @@ class Connection(GlobalClockMixin, TaskMixin):
 
     def task_read_polling(self, task):
         if self.reader.dataAvailable():
-            logging.debug('incoming data')
+            logging.debug('data available from server')
+            datagram = Datagram()
+            if self.reader.getData(datagram):
+                logging.debug('received data from server: %s', datagram)
+                # TODO: provide a way to supply a data callback
             self._data_last_received = 0
         else:
             # no data received
+            logging.debug('no data')
             self._data_last_received += self.get_dt()
 
         if self._data_last_received >= 10:
@@ -205,8 +240,12 @@ class Connection(GlobalClockMixin, TaskMixin):
 
         return task.cont
 
+    def shutdown(self):
+        logging.info('connection reader shutting down')
+        self.reader.shutdown()
 
-class Client(ShowBase):
+
+class Client(ShowBase, TaskMixin):
 
     def __init__(self, host, port):
         ShowBase.__init__(self)
@@ -215,11 +254,11 @@ class Client(ShowBase):
         self.accept('escape', self.close)
 
         self.conn = Connection(self, host, port)
-        self.taskMgr.add(
+        self.add_task(
             self.conn.connect,
             name='connect_to_server',
-            extraArgs=[self.connected],
-            appendTask=True,  # appends task object to args list
+            extra_args=[self.connected],
+            append_task=True,
         )
 
     def connected(self):
@@ -229,6 +268,7 @@ class Client(ShowBase):
     def close(self):
         logging.info('shutting down...')
         # TODO: close connection gracefully
+        self.conn.shutdown()
         sys.exit(0)
 
 
