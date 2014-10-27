@@ -78,6 +78,9 @@ class Packet(object):
         """
         return self._length
 
+    def __str__(self):
+        return str(self.__bytes__())
+
     def __bytes__(self):
         if self.type is None:
             raise AttributeError('{}.type not defined'.format(self.__class__.__name__))
