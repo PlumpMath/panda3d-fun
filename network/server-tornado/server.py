@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 import logging
 import argparse
@@ -12,6 +12,10 @@ from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import IOStream
 
 
+class Server(object):
+    pass
+
+
 connections = dict()
 
 
@@ -20,11 +24,14 @@ def send_heartbeat():
         # skip heartbeat if no connections
         return
 
-    logging.debug('sending heartbeat to %d connection(s)', len(connections))
+    heartbeat = bytes(protocol.Heartbeat())
+    logging.debug(
+        'sending heartbeat to %d connection(s)',
+        len(connections)
+    )
     for conn_addr in connections:
         stream = connections[conn_addr]
-        p = protocol.HeartBeat()
-        stream.write(bytes(p))
+        stream.write(heartbeat)
 
 
 def clear_connection(conn_addr):

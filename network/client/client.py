@@ -156,7 +156,7 @@ class Connection(GlobalClockMixin, TaskMixin):
         )
 
         # we're using our own protocol so we don't want panda reading our headers and getting
-        # all foobared by it (not setting (not setting raw mode causes `dataAvailable` to block
+        # all foobared by it (not setting raw mode causes `dataAvailable` to block
         # once there is actually data to process)
         self.reader.setRawMode(True)
 
@@ -227,6 +227,7 @@ class Connection(GlobalClockMixin, TaskMixin):
             datagram = Datagram()
             if self.reader.getData(datagram):
                 logging.debug('received data from server: %s', datagram)
+                logging.debug('received data from server: %s', datagram.getMessage())
                 # TODO: provide a way to supply a data callback
             self._data_last_received = 0
         else:
