@@ -1,4 +1,5 @@
 tornado
+bitarray
 
 -e ../lib/launch
 -e ../common/protocol

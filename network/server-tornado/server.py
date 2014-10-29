@@ -6,56 +6,57 @@ import socket
 import functools
 import errno
 
-import protocol
-
-from tornado.ioloop import IOLoop, PeriodicCallback
-from tornado.iostream import IOStream
+from tornado.ioloop import IOLoop
 
 
 class Server(object):
-    pass
 
+    def __init__(self, io_loop=None):
+        self.bind_host = None
+        self.bind_port = None
+        self.sock = None
+        self.io_loop = io_loop or IOLoop.current()
 
-connections = dict()
+        self.connections = dict()
 
+    def add_connection(self):
+        raise NotImplementedError
 
-def send_heartbeat():
-    if len(connections) < 1:
-        # skip heartbeat if no connections
-        return
+    def listen(self, host, port):
+        self.host = host
+        self.port = port
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setblocking(0)
+        self.sock.bind((self.host, self.port))
+        logging.info('Listening on %s:%d', self.host, self.port)
 
-    heartbeat = bytes(protocol.Heartbeat())
-    logging.debug(
-        'sending heartbeat to %d connection(s)',
-        len(connections)
-    )
-    for conn_addr in connections:
-        stream = connections[conn_addr]
-        stream.write(heartbeat)
+        callback = functools.partial(self.recv, self.sock)
+        self.io_loop.add_handler(self.sock.fileno(), callback, self.io_loop.READ)
 
+    def recv(self, sock, fd, events):
+        while True:
+            try:
+                data, address = sock.recvfrom(1024)
+                logging.debug('received data: %r, from: %s', data, address)
+                self.process_data(data, address)
+            except socket.error as ex:
+                # EWOULDBLOCK, EAGAIN - An operation that would block was attempted on an
+                # object that has non-blocking mode selected. Trying the same operation again
+                # will block until some external condition makes it possible to read, write, or
+                # connect. Resource temporarily unavailable; the call might work if you try
+                # again later.
+                if ex.args[0] not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    raise
+                return
 
-def clear_connection(conn_addr):
-    if conn_addr in connections:
-        del connections[conn_addr]
-        logging.info('removed closed connection %s (%d)', conn_addr, len(connections))
+    def process_data(self, data, address):
+        raise NotImplementedError
 
+    def shutdown(self):
+        logging.info('Shutting down')
+        self.sock.close()
 
-def connection_ready(sock, fd, events):
-    while True:
-        try:
-            connection, address = sock.accept()
-        except socket.error as ex:
-            if ex.args[0] not in (errno.EWOULDBLOCK, errno.EAGAIN):
-                raise
-            return
-
-        connection.setblocking(0)
-        stream = IOStream(connection)
-        # add callback to handle stream close
-        stream.set_close_callback(functools.partial(clear_connection, address))
-
-        connections[address] = stream
-        logging.info('accepted connection from %s (%d)', address, len(connections))
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
@@ -66,21 +67,11 @@ if __name__ == '__main__':
                         help='address to bind to (default: 127.0.0.1)')
     args = parser.parse_args()
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setblocking(0)
-    sock.bind((args.bind_addr, args.bind_port))
-    logging.info('binding on %s:%d', args.bind_addr, args.bind_port)
-    sock.listen(128)
-
     io_loop = IOLoop.current()
-    callback = functools.partial(connection_ready, sock)
-    io_loop.add_handler(sock.fileno(), callback, io_loop.READ)
-    heartbeat = PeriodicCallback(send_heartbeat, 2000, io_loop)
-    heartbeat.start()
-
+    server = Server(io_loop)
     try:
+        server.listen(args.bind_addr, args.bind_port)
         io_loop.start()
     except KeyboardInterrupt:
-        logging.info('shutting down')
-        IOLoop.current().stop()
+        server.shutdown()
+        io_loop.stop()
